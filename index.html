@@ -1,0 +1,1009 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YT-Chat-Categorizer</title>
+<meta name="description" content="Extract and categorize YouTube links from WhatsApp chat exports using ML and LLM classification.">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <header class="header">
+    <h1>⚡ YT-Chat-Categorizer</h1>
+    <p>Extract YouTube links from WhatsApp exports and categorize them with ML &amp; LLM-powered classification.</p>
+  </header>
+
+  <!-- Settings -->
+  <section class="card" id="settingsCard">
+    <div class="card-title collapsible" id="configToggle" onclick="toggleConfig()">
+      <span><span class="icon">⚙️</span> Configuration</span>
+      <span class="collapse-arrow" id="configArrow">▾</span>
+    </div>
+    <div class="card-body" id="configBody">
+      <div class="row">
+        <div class="form-group">
+          <label>API Provider</label>
+          <select id="provider">
+            <option value="openai">OpenAI</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="groq">Groq</option>
+            <option value="nvidia">Nvidia NIM ⚠️</option>
+            <option value="gemini">Google Gemini</option>
+            <option value="claude">Anthropic Claude</option>
+            <option value="custom">Custom (OpenAI-compatible)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Model</label>
+          <input type="text" id="model" placeholder="Auto-detected from provider">
+        </div>
+      </div>
+      <div class="cors-warn" id="corsWarn">
+        ⚠️ <strong>CORS restriction:</strong> Nvidia NIM does not allow direct browser requests from <code>file://</code> pages. The LLM call will be blocked by your browser. Use <strong>OpenAI, OpenRouter, Groq, or Gemini</strong> instead — or serve this file via a local HTTP server (<code>npx serve .</code>).
+      </div>
+      <div class="form-group" id="baseUrlGroup" style="display:none">
+        <label>Custom Base URL</label>
+        <input type="text" id="baseUrl" placeholder="https://your-server.com/v1">
+      </div>
+      <div class="row">
+        <div class="form-group">
+          <label>LLM API Key</label>
+          <input type="password" id="apiKey" placeholder="sk-... (only needed if Use LLM is enabled)">
+        </div>
+        <div class="form-group">
+          <label>YouTube Data API v3 Key (Optional)</label>
+          <input type="password" id="ytApiKey" placeholder="AIza... (enables duration fetch)">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Dynamic Category Management</label>
+        <div style="font-size:0.75rem;color:var(--text3);margin-bottom:8px">Edit the base taxonomy. These are passed to the classification logic. Max 5 words each.</div>
+        <div id="dynamicCatTags" style="display:flex;flex-wrap:wrap;gap:8px;padding:12px;background:rgba(0,0,0,.2);border:1px solid var(--border);border-radius:8px;min-height:50px;margin-bottom:8px;">
+          <!-- Populated by JS -->
+        </div>
+        <div style="display:flex;gap:8px;">
+          <input type="text" id="newCatInput" placeholder="Add custom category..." style="flex:1" onkeypress="if(event.key==='Enter')addDynCategory()">
+          <button class="btn" style="background:var(--accent);color:#fff;border:none;padding:0 16px;border-radius:var(--radius-sm);cursor:pointer;font-weight:600;font-size:0.8rem" onclick="addDynCategory()">Add Category</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Confidence Threshold (τ)</label>
+        <div class="slider-wrap">
+          <input type="range" id="threshold" min="0" max="0.95" step="0.05" value="0.45">
+          <span class="slider-val" id="thresholdVal">0.45</span>
+        </div>
+      </div>
+      <label class="check-wrap">
+        <input type="checkbox" id="useLLM"> Enable LLM Tier (Tier 2) when ML confidence &lt; τ
+      </label>
+    </div>
+  </section>
+
+  <!-- Upload -->
+  <section class="card">
+    <div class="card-title"><span class="icon">📁</span> Upload WhatsApp Export</div>
+    <div class="upload-zone" id="uploadZone">
+      <div class="uz-icon">📄</div>
+      <div class="uz-text">
+        <strong>Click or drag &amp; drop</strong> a <code>.txt</code> file here<br>
+        <span style="font-size:.8rem;color:var(--text3)">WhatsApp chat export with YouTube links</span>
+      </div>
+      <input type="file" id="fileInput" accept=".txt">
+    </div>
+  </section>
+
+  <!-- Progress -->
+  <section class="card progress-section" id="progressSection">
+    <div class="card-title pulsing"><span class="icon">🔄</span> <span id="progressTitle">Processing...</span></div>
+    <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar"></div></div>
+    <div class="progress-text" id="progressText">Initializing...</div>
+    <div id="discoveryPanel" style="display:none;margin-top:14px;padding:12px 16px;border-radius:8px;background:rgba(124,92,252,.08);border:1px solid rgba(124,92,252,.2)">
+      <div style="font-size:.8rem;font-weight:600;color:var(--accent);margin-bottom:6px">🔭 Discovery Phase — Analyzing batch context...</div>
+      <div id="discoveryStatus" style="font-size:.78rem;color:var(--text2)">Sampling titles and querying LLM for relevant categories...</div>
+      <div id="discoveryTags" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
+    </div>
+  </section>
+
+  <!-- Results -->
+  <section class="results-section" id="resultsSection">
+    <div class="card">
+      <div class="card-title"><span class="icon">📊</span> Summary</div>
+      <div class="stats-grid" id="statsGrid"></div>
+      <div class="cat-chart" id="catChart"></div>
+      <div class="export-bar">
+        <button class="btn btn-secondary btn-sm" onclick="exportCSV()">📋 Export CSV</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportJSON()">📦 Export JSON</button>
+        <button class="btn btn-secondary btn-sm" onclick="copyResults()">📎 Copy Summary</button>
+      </div>
+    <div class="card" id="filtersCard" style="display:none; position:relative; z-index:50;">
+      <div class="card-title"><span class="icon">🔍</span> Filters</div>
+      <div class="filter-group">
+        <div class="filter-label">Categories</div>
+        <div class="filter-checks" id="categoryFilters"></div>
+      </div>
+      <div style="margin-top:8px">
+        <label class="check-wrap">
+          <input type="checkbox" id="showInvalid" onchange="applyFilters()"> Show invalid / removed links <span id="invalidCount" style="font-size:.75rem;color:var(--text3);font-family:'JetBrains Mono',monospace"></span>
+        </label>
+      </div>
+    </div>
+    <div id="resultsList"></div>
+  </section>
+
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ===== PROVIDER CONFIG =====
+const PROVIDERS={
+  openai:{name:"OpenAI",base:"https://api.openai.com/v1",model:"gpt-4o-mini",fmt:"openai"},
+  openrouter:{name:"OpenRouter",base:"https://openrouter.ai/api/v1",model:"google/gemini-2.0-flash-001",fmt:"openai"},
+  groq:{name:"Groq",base:"https://api.groq.com/openai/v1",model:"llama-3.3-70b-versatile",fmt:"openai"},
+  nvidia:{name:"Nvidia NIM",base:"https://integrate.api.nvidia.com/v1",model:"meta/llama-3.1-70b-instruct",fmt:"openai"},
+  gemini:{name:"Google Gemini",base:"https://generativelanguage.googleapis.com/v1beta",model:"gemini-2.0-flash",fmt:"gemini"},
+  claude:{name:"Anthropic Claude",base:"https://api.anthropic.com/v1",model:"claude-sonnet-4-20250514",fmt:"anthropic"},
+  custom:{name:"Custom",base:"",model:"",fmt:"openai"}
+};
+
+// ===== CATEGORY KEYWORDS (Tier 1 ML) =====
+const CATS={
+  "Music":{icon:"🎵",color:"#a855f7",kw:{"song":4,"music":4,"official video":5,"official audio":5,"lyrics":4,"album":3,"remix":4,"cover song":3,"acoustic":3,"ft.":3,"feat":3,"music video":5,"karaoke":3,"instrumental":3,"soundtrack":3,"ost":3,"concert":3,"lofi":3,"lo-fi":3,"playlist":2,"dj":3,"beat":2,"ep":2,"mv":3}},
+  "Gaming":{icon:"🎮",color:"#22c55e",kw:{"gameplay":5,"walkthrough":5,"playthrough":5,"let's play":5,"gaming":4,"game":2,"speedrun":5,"boss fight":4,"fortnite":3,"minecraft":3,"gta":3,"valorant":3,"apex":3,"warzone":3,"ps5":3,"xbox":3,"nintendo":3,"esports":4,"ranked":3,"pvp":3,"rpg":3,"mmorpg":4}},
+  "Education":{icon:"📚",color:"#3b82f6",kw:{"tutorial":5,"learn":4,"course":5,"lesson":4,"explained":4,"lecture":5,"class":3,"education":4,"crash course":5,"introduction":3,"programming":3,"coding":3,"python":3,"javascript":3,"math":3,"physics":3,"chemistry":3,"biology":3,"history":3,"certification":3}},
+  "Tech":{icon:"💻",color:"#06b6d4",kw:{"review":4,"unboxing":5,"specs":4,"benchmark":5,"iphone":3,"samsung":3,"android":3,"apple":3,"laptop":3,"gpu":3,"cpu":3,"gadget":4,"hands on":4,"comparison":3,"versus":3,"vs":2,"tech":3,"software":3,"hardware":3,"setup":2,"teardown":4}},
+  "Entertainment":{icon:"🎬",color:"#f59e0b",kw:{"trailer":4,"movie":3,"film":3,"scene":3,"clip":2,"reaction":4,"react":3,"compilation":3,"best moments":4,"funny":3,"highlights":3,"top 10":3,"ranking":3,"tier list":4}},
+  "Comedy":{icon:"😂",color:"#f97316",kw:{"comedy":5,"funny":4,"prank":5,"meme":4,"parody":5,"skit":4,"stand up":5,"standup":5,"roast":4,"blooper":4,"fail":3,"hilarious":4,"jokes":4,"sketch":4}},
+  "News":{icon:"📰",color:"#ef4444",kw:{"breaking":4,"news":4,"politics":4,"election":4,"debate":4,"interview":3,"report":3,"analysis":3,"update":2,"latest":2,"press":3,"government":3,"policy":3}},
+  "Sports":{icon:"⚽",color:"#10b981",kw:{"goal":3,"match":3,"highlights":3,"football":4,"soccer":4,"basketball":4,"nba":4,"nfl":4,"cricket":4,"tennis":4,"champion":3,"world cup":5,"olympics":4,"workout":3,"athlete":3,"score":2,"league":3}},
+  "Lifestyle":{icon:"✨",color:"#ec4899",kw:{"vlog":5,"day in":4,"routine":4,"haul":4,"grwm":5,"get ready":4,"room tour":4,"lifestyle":4,"travel":3,"vacation":3,"house tour":4,"apartment":3,"morning routine":5,"night routine":5}},
+  "Science":{icon:"🔬",color:"#8b5cf6",kw:{"science":4,"experiment":4,"space":3,"nasa":4,"quantum":4,"research":3,"discovery":4,"nature":3,"documentary":3,"planet":3,"universe":3,"evolution":3,"climate":3,"biology":3,"astronomy":4}},
+  "Cooking":{icon:"🍳",color:"#f59e0b",kw:{"recipe":5,"cook":4,"cooking":4,"bake":4,"baking":4,"chef":3,"kitchen":3,"food":3,"meal":3,"dish":3,"ingredient":3,"restaurant":3,"mukbang":5,"eating":3,"taste test":4,"gordon ramsay":4}},
+  "How-To":{icon:"🔧",color:"#14b8a6",kw:{"how to":5,"diy":5,"fix":3,"repair":4,"build":3,"make":2,"install":4,"setup":3,"guide":3,"step by step":5,"tips":3,"tricks":3,"hack":3,"life hack":4}},
+  "Podcast":{icon:"🎙️",color:"#6366f1",kw:{"podcast":5,"episode":3,"ep.":2,"interview":3,"conversation":3,"discussion":3,"talk":2,"q&a":4,"ama":4,"guest":2,"host":2,"panel":3}},
+  "Fitness":{icon:"💪",color:"#ef4444",kw:{"workout":5,"exercise":5,"fitness":4,"gym":4,"training":3,"cardio":4,"yoga":4,"pilates":4,"weight loss":4,"diet":3,"muscle":3,"bodybuilding":4,"hiit":5,"stretching":3,"abs":3}},
+  "Business":{icon:"💼",color:"#0ea5e9",kw:{"business":4,"startup":4,"entrepreneur":4,"investing":4,"stocks":4,"crypto":4,"bitcoin":4,"money":3,"finance":4,"marketing":4,"passive income":5,"side hustle":4,"real estate":4,"trading":4}},
+  "Other":{icon:"📌",color:"#64748b",kw:{}}
+};
+
+let CAT_NAMES = Object.keys(CATS).filter(c => c !== 'Other');
+const YT_REGEX=/(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:[^&\s]*&)*v=|embed\/|shorts\/|live\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/g;
+let allResults=[];
+
+// Dynamic Category Management
+function renderDynCategories() {
+  const container = document.getElementById('dynamicCatTags');
+  if(!container) return;
+  container.innerHTML = CAT_NAMES.map(cat => 
+    `<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:rgba(124,92,252,.15);border:1px solid rgba(124,92,252,.3);border-radius:20px;font-size:.75rem;color:var(--text)">
+      ${cat}
+      <span style="cursor:pointer;opacity:0.6;font-weight:bold" onclick="removeDynCategory('${cat.replace(/'/g, "\\'")}')">&times;</span>
+    </span>`
+  ).join('');
+}
+
+function addDynCategory() {
+  const input = document.getElementById('newCatInput');
+  if(!input) return;
+  const val = input.value.trim().replace(/[^a-zA-Z0-9 &\-]/g,'');
+  if(!val) return;
+  const words = val.split(/\s+/);
+  if(words.length > 5) {
+    showToast('Category name limited to 5 words max', 'error');
+    return;
+  }
+  const cleanVal = words.join(' ');
+  if(!CAT_NAMES.find(c => c.toLowerCase() === cleanVal.toLowerCase())) {
+    CAT_NAMES.push(cleanVal);
+    renderDynCategories();
+  }
+  input.value = '';
+}
+
+function removeDynCategory(cat) {
+  CAT_NAMES = CAT_NAMES.filter(c => c !== cat);
+  renderDynCategories();
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  renderDynCategories();
+});
+
+// ===== UI BINDINGS =====
+const $=id=>document.getElementById(id);
+const providerSel=$('provider'), modelIn=$('model'), baseUrlIn=$('baseUrl'),
+      baseUrlGrp=$('baseUrlGroup'), apiKeyIn=$('apiKey'),
+      thresholdIn=$('threshold'), thresholdVal=$('thresholdVal'),
+      useLLMCb=$('useLLM'), uploadZone=$('uploadZone'), fileInput=$('fileInput'),
+      progressSection=$('progressSection'), progressBar=$('progressBar'),
+      progressTitle=$('progressTitle'), progressText=$('progressText'),
+      resultsSection=$('resultsSection'), statsGrid=$('statsGrid'),
+      catChart=$('catChart'), resultsList=$('resultsList'), toast=$('toast');
+
+// CORS-affected providers when running from file://
+const CORS_RESTRICTED=['nvidia'];
+function updateProviderUI(){
+  const prov=providerSel.value;
+  const p=PROVIDERS[prov];
+  modelIn.placeholder=p.model||'Enter model name';
+  baseUrlGrp.style.display=prov==='custom'?'block':'none';
+  document.getElementById('corsWarn').classList.toggle('show',CORS_RESTRICTED.includes(prov));
+}
+providerSel.addEventListener('change',updateProviderUI);
+thresholdIn.addEventListener('input',()=>thresholdVal.textContent=thresholdIn.value);
+
+function toggleConfig(){
+  const body=document.getElementById('configBody');
+  const arrow=document.getElementById('configArrow');
+  const collapsed=body.classList.toggle('collapsed');
+  arrow.style.transform=collapsed?'rotate(-90deg)':'';
+}
+
+// Upload handlers — input overlays the zone directly, no programmatic .click() needed
+fileInput.addEventListener('change',e=>{if(e.target.files[0])handleFile(e.target.files[0])});
+uploadZone.addEventListener('dragover',e=>{e.preventDefault();e.stopPropagation();uploadZone.classList.add('drag')});
+uploadZone.addEventListener('dragleave',e=>{if(!uploadZone.contains(e.relatedTarget))uploadZone.classList.remove('drag')});
+uploadZone.addEventListener('drop',e=>{e.preventDefault();e.stopPropagation();uploadZone.classList.remove('drag');if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0])});
+
+// ===== TOAST =====
+function showToast(msg,type='success'){
+  toast.textContent=msg;toast.className='toast toast-'+type+' show';
+  setTimeout(()=>toast.classList.remove('show'),3000);
+}
+
+// ===== STEP 1: EXTRACT LINKS =====
+function extractLinks(text){
+  const seen=new Set(), links=[];
+  let m;
+  const rx=new RegExp(YT_REGEX.source,'g');
+  while((m=rx.exec(text))!==null){
+    const vid=m[1], url=m[0].startsWith('http')?m[0]:'https://'+m[0];
+    if(!seen.has(vid)){seen.add(vid);links.push({url,videoId:vid,fullMatch:m[0]})}
+  }
+  return links;
+}
+
+// ===== STEP 2: FETCH TITLE (thumbnail-first validation) =====
+async function checkThumb(videoId){
+  return new Promise(resolve=>{
+    const img=new Image();
+    img.onload=()=>resolve(true);
+    img.onerror=()=>resolve(false);
+    img.src=`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
+    setTimeout(()=>resolve(false),4000);
+  });
+}
+
+async function tryFetchTitle(videoId){
+  const canonical=`https://www.youtube.com/watch?v=${videoId}`;
+  const enc=encodeURIComponent(canonical);
+  const endpoints=[`https://noembed.com/embed?url=${enc}`,`https://www.youtube.com/oembed?url=${enc}&format=json`];
+  let lastError='',apiNotFound=false;
+  for(const ep of endpoints){
+    try{
+      const r=await fetch(ep);
+      if(r.ok){
+        const d=await r.json();
+        if(d.title&&!d.error)return{ok:true,title:d.title,author:d.author_name||'',thumb:d.thumbnail_url||'',source:ep};
+        if(d.error){apiNotFound=true;lastError=d.error}
+      }else{
+        if([401,403,404].includes(r.status))apiNotFound=true;
+        lastError=`HTTP ${r.status}`;
+      }
+    }catch(e){lastError=e.message}
+  }
+  return{ok:false,apiNotFound,error:lastError};
+}
+
+async function fetchTitle(videoId){
+  // Phase 1: quick thumbnail check to determine if video is alive
+  const thumbUrl=`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
+  const thumbOk=await checkThumb(videoId);
+
+  // Phase 2: try title fetch (2 attempts regardless of thumb status)
+  for(let attempt=0;attempt<2;attempt++){
+    const res=await tryFetchTitle(videoId);
+    if(res.ok)return{title:res.title,author:res.author,thumb:res.thumb||thumbUrl,source:res.source,status:'ok'};
+    
+    // API explicit 404/401
+    if(res.apiNotFound) {
+      // If thumbnail is valid, it's age restricted or noembed rejected it. It exists!
+      if(thumbOk) return{title:null,author:'',thumb:thumbUrl,source:'failed',error:'Title unavailable (age-restricted or API block)',status:'title_missing'};
+      // Otherwise, definitely removed
+      return{title:null,author:'',thumb:'',source:'failed',error:res.error,status:'removed'};
+    }
+    if(attempt<1)await new Promise(r=>setTimeout(r,800));
+  }
+
+  // Phase 3: if thumbnail alive, do 2 extra title retries (video exists, network issue)
+  if(thumbOk){
+    for(let attempt=0;attempt<2;attempt++){
+      await new Promise(r=>setTimeout(r,1000*(attempt+1)));
+      const res=await tryFetchTitle(videoId);
+      if(res.ok)return{title:res.title,author:res.author,thumb:res.thumb||thumbUrl,source:res.source,status:'ok'};
+      if(res.apiNotFound) return{title:null,author:'',thumb:thumbUrl,source:'failed',error:'Title unavailable (age-restricted or API block)',status:'title_missing'};
+    }
+    // Thumbnail alive but title unreachable after all retries
+    return{title:null,author:'',thumb:thumbUrl,source:'failed',error:'Title unavailable after retries (video exists)',status:'title_missing'};
+  }
+
+  // Thumbnail failed + title failed → removed/private
+  return{title:null,author:'',thumb:'',source:'failed',error:'Title and thumbnail both unavailable',status:'removed'};
+}
+
+
+// ===== STEP 3: ML CATEGORIZATION (Tier 1) =====
+function categorizeML(title){
+  const lower=title.toLowerCase();
+  const words=lower.split(/\s+/).filter(Boolean);
+  const totalWords=words.length;
+  const scores={};
+  for(const[cat,cfg]of Object.entries(CATS)){
+    if (cat !== 'Other' && !CAT_NAMES.includes(cat)) continue; // Skip categories removed by user
+    let tw=0;const matched=[];
+    for(const[kw,w]of Object.entries(cfg.kw)){
+      if(lower.includes(kw)){tw+=w;matched.push({keyword:kw,weight:w})}
+    }
+    // Confidence via tanh normalization
+    let conf=Math.tanh(tw/(3+totalWords*0.3))*0.95;
+    // Short title penalty
+    if(totalWords<=1)conf*=0.3;
+    else if(totalWords<=2)conf*=0.55;
+    else if(totalWords<=3)conf*=0.8;
+    scores[cat]={confidence:Math.round(conf*1000)/1000,matched};
+  }
+  const sorted=Object.entries(scores).sort((a,b)=>b[1].confidence-a[1].confidence);
+  const best=sorted[0];
+  return{category:best[0],confidence:best[1].confidence,matched:best[1].matched,allScores:scores,sorted};
+}
+
+// ===== STEP 4: LLM CATEGORIZATION (Tier 2) =====
+let dynamicCategories=[]; // populated by discovery phase
+
+function buildBatchSystemPrompt(extraCats=[]){
+  const baseCats = CAT_NAMES.join(', ');
+  const extra = extraCats.length ? extraCats.join(', ') : '';
+  const allList = extraCats.length ? `${baseCats}, ${extra}` : baseCats;
+  
+  return `You are a YouTube video categorizer. You will be given a numbered list of video titles.
+Categorize EVERY SINGLE title in the list. Do not skip any. Do not combine them.
+You MUST output ONLY a valid JSON array of objects.
+Each object must have exactly two keys: "index" (the integer number from the input) and "category" (the category string).
+
+You MUST exclusively use a category from the following allowed list:
+[ ${allList} ]
+
+PRIMARY CATEGORIES: ${baseCats}
+${extra ? `SUPPLEMENTAL CATEGORIES: ${extra}\n\nCRITICAL INSTRUCTION: Always prefer a PRIMARY category if it reasonably describes the video. Only use a SUPPLEMENTAL category if the video absolutely does not fit any primary category.` : ''}
+
+Example Input:
+1. "Learn Python in 10 Minutes"
+2. "iPhone 15 Pro Review"
+
+Example Output:
+[
+  {"index": 1, "category": "Education"},
+  {"index": 2, "category": "Tech"}
+]
+
+CRITICAL:
+- Respond with ONLY the JSON array. No markdown blocks like \`\`\`json.
+- Do not add any conversational text.
+- Ensure the JSON is completely valid.
+- You must process ALL items provided in the list.`;
+}
+
+// Raw API call helper (shared by discovery + classification)
+async function callLLM(systemPrompt,userPrompt,maxTokens=80){
+  const prov=providerSel.value;
+  const cfg=PROVIDERS[prov];
+  const key=apiKeyIn.value.trim();
+  if(!key)throw new Error('API key is empty — enter your key in the Configuration section.');
+  const mdl=modelIn.value.trim()||cfg.model;
+  const base=prov==='custom'?baseUrlIn.value.trim():cfg.base;
+  let url,headers,body,fmt=cfg.fmt;
+  if(prov==='custom')fmt='openai';
+
+  if(fmt==='openai'){
+    url=`${base}/chat/completions`;
+    headers={"Content-Type":"application/json","Authorization":`Bearer ${key}`};
+    if(prov==='openrouter')headers["HTTP-Referer"]="https://yt-chat-categorizer.app";
+    body={model:mdl,messages:[{role:"system",content:systemPrompt},{role:"user",content:userPrompt}],temperature:0.3,max_tokens:maxTokens};
+  }else if(fmt==='gemini'){
+    url=`${base}/models/${mdl}:generateContent?key=${key}`;
+    headers={"Content-Type":"application/json"};
+    body={contents:[{parts:[{text:systemPrompt+"\n\n"+userPrompt}]}],generationConfig:{temperature:0.3,maxOutputTokens:maxTokens}};
+  }else if(fmt==='anthropic'){
+    url=`${base}/messages`;
+    headers={"Content-Type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"};
+    body={model:mdl,system:systemPrompt,messages:[{role:"user",content:userPrompt}],max_tokens:maxTokens,temperature:0.3};
+  }
+
+  let resp;
+  try{
+    resp=await fetch(url,{method:"POST",headers,body:JSON.stringify(body)});
+  }catch(netErr){
+    const isCors=netErr instanceof TypeError;
+    throw new Error(isCors
+      ?`CORS blocked: ${new URL(url).hostname} does not allow direct browser access from file:// pages. Use OpenAI, OpenRouter, Groq, or Gemini — or serve via npx serve .`
+      :`Network error: ${netErr.message}`);
+  }
+  if(!resp.ok){const e=await resp.text();throw new Error(`LLM API ${resp.status}: ${e}`)}
+  const data=await resp.json();
+  let text='';
+  if(fmt==='openai')text=data.choices?.[0]?.message?.content||'';
+  else if(fmt==='gemini')text=data.candidates?.[0]?.content?.parts?.[0]?.text||'';
+  else if(fmt==='anthropic')text=data.content?.[0]?.text||'';
+  return{text,url,body,key};
+}
+
+// Discovery phase: ask LLM for batch-relevant categories
+async function discoverCategories(titles){
+  const sample=titles.sort(()=>Math.random()-0.5).slice(0,100);
+  const sys=`You analyze batches of YouTube video titles and identify relevant supplemental content categories.
+The user already has these primary categories: ${CAT_NAMES.join(', ')}.
+Identify 4-10 additional niche categories that are strongly represented in this batch but do not fit well into the primary categories.
+Respond with ONLY a comma-separated list of these new category names. Each must be 1-2 words. Do NOT include any of the primary categories.`;
+  const usr=`Here are ${sample.length} YouTube video titles. What specific content categories are represented that aren't in the standard primary list?\n\n${sample.map((t,i)=>`${i+1}. ${t}`).join('\n')}`;
+  try{
+    const{text}=await callLLM(sys,usr,150);
+    return text.split(',').map(s=>s.trim().replace(/[^a-zA-Z0-9 &\-]/g,'').trim()).filter(s=>s.length>1&&s.length<30);
+  }catch(e){
+    console.warn('Discovery phase failed:',e.message);
+    return[];
+  }
+}
+
+async function categorizeLLMBatch(items, extraCats=[]){
+  const key=apiKeyIn.value.trim();
+  const sys=buildBatchSystemPrompt(extraCats);
+  const usr=`Categorize these YouTube video titles:\n` + items.map(item=>`${item.index}. "${item.title}"`).join('\n');
+  const allCats=[...CAT_NAMES,...extraCats];
+  let lastRaw='',lastError='';
+
+  // We are requesting JSON array output.
+  // maxTokens must be larger for batch (e.g. 1500 for 50 items)
+  for(let attempt=0;attempt<3;attempt++){
+    try{
+      const{text,url,body}=await callLLM(sys,usr,2500);
+      lastRaw=text;
+      
+      // Clean up markdown fences if LLM ignored instructions
+      let cleaned=text.replace(/^```json\s*/i,'').replace(/^```\s*/,'').replace(/\s*```$/,'').trim();
+      if(!cleaned.startsWith('[')) {
+         // try to find array in the text
+         const match = cleaned.match(/\[.*\]/s);
+         if(match) cleaned = match[0];
+      }
+      
+      const parsed=JSON.parse(cleaned);
+      if(!Array.isArray(parsed)) throw new Error('Root is not an array');
+      
+      // Validate array elements
+      const resultsMap = new Map();
+      parsed.forEach(item => {
+        if(item && typeof item.index === 'number' && typeof item.category === 'string') {
+          // Normalize category
+          const valid=allCats.find(c=>c.toLowerCase()===item.category.trim().toLowerCase()) || 'Other';
+          resultsMap.set(item.index, valid);
+        }
+      });
+      
+      const maskedKey=key.length>6?key.slice(0,6)+'•'.repeat(Math.min(key.length-6,20)):key.slice(0,2)+'••••';
+      return{resultsMap,rawResponse:text,prompt:{system:sys,user:usr},requestBody:body,requestUrl:url,maskedKey,attempts:attempt+1};
+    }catch(e){
+      lastError=e.message;
+      if(e.message.includes('CORS')||e.message.includes('401')||e.message.includes('403')||e.message.includes('empty'))throw e;
+    }
+    if(attempt<2)await new Promise(r=>setTimeout(r,1000));
+  }
+  throw new Error(`LLM Batch failed after 3 attempts. Last: ${lastError}\nRaw output: ${lastRaw.slice(0,100)}...`);
+}
+
+// ===== MAIN PIPELINE =====
+async function handleFile(file){
+  if(!file.name.endsWith('.txt')){showToast('Please upload a .txt file','error');return}
+  const text=await file.text();
+  const links=extractLinks(text);
+  if(!links.length){showToast('No YouTube links found in file','error');return}
+
+  const tau=parseFloat(thresholdIn.value);
+  const useLlm=useLLMCb.checked;
+  allResults=[];
+  dynamicCategories=[];
+
+  // Show progress & scroll to it
+  progressSection.style.display='block';
+  resultsSection.style.display='none';
+  resultsList.innerHTML='';
+  document.getElementById('discoveryPanel').style.display='none';
+  setTimeout(()=>progressSection.scrollIntoView({behavior:'smooth',block:'start'}),50);
+
+  // ── Phase 0: title fetch for all links ──
+  progressTitle.textContent='Phase 1 of 3 — Fetching metadata...';
+  const titleMap=new Map();
+  const ytKey = document.getElementById('ytApiKey')?.value.trim();
+  
+  if(ytKey) {
+    // Fast batch fetch via YouTube Data API
+    const ids = links.map(l=>l.videoId);
+    for(let i=0; i<ids.length; i+=50) {
+      const chunk = ids.slice(i, i+50);
+      progressBar.style.width=Math.round(((i+chunk.length)/ids.length)*33)+'%';
+      progressText.textContent=`Fetching metadata chunk ${Math.floor(i/50)+1}...`;
+      
+      try {
+        const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${chunk.join(',')}&key=${ytKey}`;
+        const res = await fetch(url);
+        if(!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        
+        // Track found IDs to mark missing ones as removed
+        const found = new Set();
+        for(const item of data.items) {
+          found.add(item.id);
+          // Parse ISO 8601 duration
+          let durStr = '';
+          const match = item.contentDetails?.duration?.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+          if(match) {
+            const h=match[1]?parseInt(match[1]):0;
+            const m=match[2]?parseInt(match[2]):0;
+            const s=match[3]?parseInt(match[3]):0;
+            if(h>0) durStr = `${h}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+            else durStr = `${m}:${s.toString().padStart(2,'0')}`;
+          }
+          
+          titleMap.set(item.id, {
+            title: item.snippet.title,
+            author: item.snippet.channelTitle,
+            thumb: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || '',
+            duration: durStr,
+            source: 'yt_api',
+            status: 'ok'
+          });
+        }
+        
+        // Items not in response are invalid/removed
+        for(const id of chunk) {
+          if(!found.has(id)) {
+            titleMap.set(id, {title:null, author:'', thumb:'', source:'yt_api', status:'removed', error:'Video not found via API'});
+          }
+        }
+      } catch(e) {
+        // Fallback to oEmbed if API fails
+        console.warn('YT API failed:', e);
+        for(const id of chunk) {
+          titleMap.set(id, await fetchTitle(id));
+        }
+      }
+    }
+  } else {
+    // Slow serial fetch via oEmbed
+    for(let i=0;i<links.length;i++){
+      const link=links[i];
+      progressBar.style.width=Math.round(((i+1)/links.length)*33)+'%';
+      progressText.textContent=link.url;
+      titleMap.set(link.videoId,await fetchTitle(link.videoId));
+      if(i<links.length-1)await new Promise(r=>setTimeout(r,150));
+    }
+  }
+
+  // ── Phase 1 (optional): LLM discovery ──
+  if(useLlm&&apiKeyIn.value.trim()){
+    const knownTitles=[...titleMap.values()].filter(d=>d.title).map(d=>d.title);
+    if(knownTitles.length){
+      const panel=document.getElementById('discoveryPanel');
+      const statusEl=document.getElementById('discoveryStatus');
+      const tagsEl=document.getElementById('discoveryTags');
+      panel.style.display='block';
+      progressTitle.textContent='Phase 2 of 3 — Discovering categories...';
+      progressText.textContent=`Sampling ${Math.min(knownTitles.length,100)} titles...`;
+      tagsEl.innerHTML='';
+      dynamicCategories=await discoverCategories(knownTitles);
+      if(dynamicCategories.length){
+        statusEl.textContent=`Found ${dynamicCategories.length} batch-specific categories:`;
+        tagsEl.innerHTML=dynamicCategories.map(c=>`<span style="padding:3px 10px;border-radius:20px;background:rgba(124,92,252,.2);border:1px solid rgba(124,92,252,.3);font-size:.72rem;color:var(--accent)">${c}</span>`).join('');
+      }else{
+        statusEl.textContent='No extra categories discovered — using defaults only.';
+      }
+    }
+  }
+
+  // ── Phase 2: classify each link (ML first) ──
+  progressTitle.textContent='Phase 3 of 3 — ML Classification...';
+  let llmQueue=[];
+  let idx=0;
+  for(const link of links){
+    const pct=33+Math.round(((idx+1)/links.length)*33);
+    progressBar.style.width=pct+'%';
+    progressText.textContent=link.url;
+    
+    const result={url:link.url,videoId:link.videoId,fullMatch:link.fullMatch,trace:{}, tempIndex: idx};
+    result.trace.extraction={regex:YT_REGEX.source,matched:link.fullMatch,videoId:link.videoId};
+
+    const titleData=titleMap.get(link.videoId);
+    result.title=titleData.title;
+    result.author=titleData.author;
+    result.thumb=titleData.thumb;
+    result.duration=titleData.duration||'';
+    result.durationSecs=0;
+    if(result.duration) {
+       const parts=result.duration.split(':').map(Number);
+       if(parts.length===3) result.durationSecs=parts[0]*3600+parts[1]*60+parts[2];
+       else if(parts.length===2) result.durationSecs=parts[0]*60+parts[1];
+    }
+    result.fetchStatus=titleData.status||'ok';
+    result.trace.titleFetch={endpoint:titleData.source,title:titleData.title,author:titleData.author,duration:result.duration,error:titleData.error||null,status:titleData.status||'ok'};
+
+    if(!result.title){
+      result.category=result.fetchStatus==='removed'?'Invalid':'Unknown';
+      result.confidence=0;result.tier='N/A';
+      result.trace.ml={skipped:true,reason:result.fetchStatus==='removed'?'Video removed or private':'Title fetch failed despite valid thumbnail'};
+      allResults.push(result);
+      idx++;
+      continue;
+    }
+
+    const ml=categorizeML(result.title);
+    result.trace.ml={category:ml.category,confidence:ml.confidence,matchedKeywords:ml.matched,topScores:ml.sorted.slice(0,5).map(([c,s])=>({category:c,confidence:s.confidence,keywords:s.matched}))};
+
+    if(ml.confidence>=tau){
+      result.category=ml.category;result.confidence=ml.confidence;result.tier='ML';
+    }else if(useLlm&&apiKeyIn.value.trim()){
+      // Queue for LLM batch
+      llmQueue.push({index: idx, title: result.title, resultRef: result, mlFallback: ml});
+    }else{
+      result.category=ml.category;result.confidence=ml.confidence;result.tier='ML (below τ)';
+    }
+
+    allResults.push(result);
+    idx++;
+  }
+
+  // ── Phase 3: LLM Batch Processing ──
+  if(llmQueue.length > 0) {
+    progressTitle.textContent=`Phase 3 of 3 — LLM Batch Processing (${llmQueue.length} titles)...`;
+    const BATCH_SIZE = 50;
+    
+    for(let i=0; i<llmQueue.length; i+=BATCH_SIZE) {
+      const batch = llmQueue.slice(i, i+BATCH_SIZE);
+      const pct = 66 + Math.round(((i + batch.length) / llmQueue.length) * 34);
+      progressBar.style.width=pct+'%';
+      progressText.textContent=`Processing batch ${Math.floor(i/BATCH_SIZE)+1} of ${Math.ceil(llmQueue.length/BATCH_SIZE)}...`;
+      
+      try {
+        const llm = await categorizeLLMBatch(batch, dynamicCategories);
+        
+        batch.forEach(item => {
+          const res = item.resultRef;
+          const assignedCat = llm.resultsMap.get(item.index);
+          
+          if(assignedCat) {
+            res.category = assignedCat;
+            res.confidence = 0.85;
+            res.tier = `LLM Batch (${llm.attempts} attempt${llm.attempts>1?'s':''})`;
+            // Store trace. Use stringified map for raw parsing info
+            res.trace.llm={category:assignedCat,rawResponse:llm.rawResponse,prompt:llm.prompt,requestBody:llm.requestBody,requestUrl:llm.requestUrl,maskedKey:llm.maskedKey,error:null};
+          } else {
+            // LLM omitted this specific index (batch fatigue)
+            if(item.mlFallback.confidence === 0){
+              res.category='Classification failed';res.confidence=0;res.tier='Failed';
+            }else{
+              res.category=item.mlFallback.category;res.confidence=item.mlFallback.confidence;res.tier='ML (LLM skipped item)';
+            }
+            res.trace.llm={error: "LLM response did not include an entry for this item's index."};
+          }
+        });
+      } catch (e) {
+        // Entire batch failed
+        batch.forEach(item => {
+          const res = item.resultRef;
+          if(item.mlFallback.confidence === 0){
+            res.category='Classification failed';res.confidence=0;res.tier='Failed';
+          }else{
+            res.category=item.mlFallback.category;res.confidence=item.mlFallback.confidence;res.tier='ML (LLM batch failed)';
+          }
+          res.trace.llm={error: e.message};
+        });
+      }
+      
+      // Configurable delay between batches
+      if(i + BATCH_SIZE < llmQueue.length) await new Promise(r => setTimeout(r, 1500));
+    }
+  }
+
+  progressSection.style.display='none';
+  renderResults();
+  showToast(`Processed ${allResults.length} videos successfully`);
+}
+
+// ===== RENDER =====
+function renderResults(){
+  resultsSection.style.display='block';
+
+  // Stats (exclude invalid/removed links)
+  const valid=allResults.filter(r=>r.category!=='Invalid');
+  const total=allResults.length;
+  const fetched=valid.filter(r=>r.title).length;
+  const invalid=total-valid.length;
+  const mlCount=valid.filter(r=>r.tier&&r.tier.startsWith('ML')).length;
+  const llmCount=valid.filter(r=>r.tier.startsWith('LLM')).length;
+  
+  const confValid=valid.filter(r=>r.category!=='Unknown');
+  const avgConf=confValid.length?confValid.reduce((s,r)=>s+r.confidence,0)/confValid.length:0;
+  
+  statsGrid.innerHTML=`
+    <div class="stat-card animate-in"><div class="stat-val">${total}</div><div class="stat-label">Links Found</div></div>
+    <div class="stat-card animate-in" style="animation-delay:.05s"><div class="stat-val">${fetched}${invalid?' <span style="font-size:.8rem;color:var(--err)">−'+invalid+'</span>':''}</div><div class="stat-label">Titles Fetched</div></div>
+    <div class="stat-card animate-in" style="animation-delay:.1s"><div class="stat-val">${mlCount}/${llmCount}</div><div class="stat-label">ML / LLM</div></div>
+    <div class="stat-card animate-in" style="animation-delay:.15s"><div class="stat-val">${(avgConf*100).toFixed(0)}%</div><div class="stat-label">Avg Confidence</div></div>`;
+
+  // Category chart (exclude Invalid)
+  const counts={};
+  valid.forEach(r=>{counts[r.category]=(counts[r.category]||0)+1});
+  let sorted=Object.entries(counts).sort((a,b)=>b[1]-a[1]);
+  
+  // Force 'Unknown' to absolute bottom
+  const unkChartIdx = sorted.findIndex(c => c[0] === 'Unknown');
+  if(unkChartIdx !== -1) {
+    const unkItem = sorted.splice(unkChartIdx, 1)[0];
+    sorted.push(unkItem);
+  }
+  
+  const maxC=sorted[0]&&sorted[0][0]!=='Unknown'?sorted[0][1]:(sorted[0]?sorted[0][1]:1);
+  catChart.innerHTML=sorted.map(([cat,cnt])=>{
+    const cfg=CATS[cat]||CATS.Other;
+    const pct=Math.round((cnt/maxC)*100);
+    return `<div class="cat-row"><span class="cat-name">${cfg.icon} ${cat}</span><div class="cat-bar-wrap"><div class="cat-bar" style="width:${pct}%;background:${cfg.color}"></div></div><span class="cat-count">${cnt}</span></div>`;
+  }).join('');
+
+  // Result cards
+  resultsList.innerHTML=allResults.map((r,i)=>{
+    const cfg=CATS[r.category]||CATS.Other;
+    const confPct=(r.confidence*100).toFixed(1);
+    const tierBadge=r.tier.startsWith('LLM')?'badge-tier':r.tier==='N/A'?'badge-fail':'badge-cat';
+    const thumbSrc=r.thumb||`https://i.ytimg.com/vi/${r.videoId}/mqdefault.jpg`;
+    const statusLabel=r.fetchStatus==='removed'?'<span style="color:var(--err);font-size:.7rem;margin-left:6px">⛔ Removed / Private</span>':'';
+    const durationLabel=r.duration?`<div class="duration-badge">⏱️ ${r.duration}</div>`:'';
+    
+    // Hyperlinks
+    const titleHtml = r.title 
+      ? `<a href="${escHtml(r.url)}" target="_blank" style="color:inherit;text-decoration:none"><strong>${escHtml(r.title)}</strong></a>` 
+      : `Title unavailable`;
+
+    return `<div class="result-card animate-in" data-category="${escHtml(r.category)}" data-status="${r.fetchStatus||'ok'}" data-duration="${r.durationSecs||0}" style="animation-delay:${Math.min(i*0.03,0.5)}s">
+      <div class="result-header">
+        <a href="${escHtml(r.url)}" target="_blank" style="display:block;flex-shrink:0"><img class="result-thumb" src="${thumbSrc}" alt="" loading="lazy" onerror="this.style.display='none'"></a>
+        <div class="result-info">
+          <div class="result-title">${titleHtml}${statusLabel}</div>
+          ${durationLabel}
+          <div class="result-url"><a href="${escHtml(r.url)}" target="_blank" style="color:inherit">${escHtml(r.url)}</a></div>
+        </div>
+      </div>
+      <div class="result-meta">
+        <span class="badge badge-cat" style="background:${cfg.color}22;color:${cfg.color};border-color:${cfg.color}44">${cfg.icon} ${r.category}</span>
+        <span class="badge badge-conf" style="background:rgba(255,255,255,.05);color:${confColor(r.confidence)};border:1px solid ${confColor(r.confidence)}33">${confPct}%</span>
+        <span class="badge ${tierBadge}">${r.tier}</span>
+      </div>
+      <div class="trace">${renderTrace(r)}</div>
+    </div>`;
+  }).join('');
+
+  // Build Excel-style advanced filter dropdown
+  const filterCounts={};
+  allResults.forEach(r=>{if(r.category!=='Invalid')filterCounts[r.category]=(filterCounts[r.category]||0)+1});
+  const invalidCnt=allResults.filter(r=>r.category==='Invalid').length;
+  const invalidCountEl=document.getElementById('invalidCount');
+  if(invalidCountEl) invalidCountEl.textContent=invalidCnt?`(${invalidCnt})`:'';
+  
+  let sortedCats=Object.entries(filterCounts).sort((a,b)=>b[1]-a[1]);
+  const unkFilterIdx = sortedCats.findIndex(c => c[0] === 'Unknown');
+  if(unkFilterIdx !== -1) {
+    const unkItem = sortedCats.splice(unkFilterIdx, 1)[0];
+    sortedCats.push(unkItem);
+  }
+  
+  const catFiltersEl=document.getElementById('categoryFilters');
+  if(catFiltersEl) {
+    catFiltersEl.innerHTML=`
+      <div style="position:relative" id="catFilterWrapper">
+        <div class="filter-btn" id="catFilterBtn" onclick="toggleDropdown('catDropdown')">
+          Categories <span class="filter-active-count" id="catActiveCount">${sortedCats.length}</span> ▾
+        </div>
+        <div class="filter-dropdown" id="catDropdown">
+          <div class="filter-dd-header">
+            <span>Filter by Category</span>
+            <div>
+              <button onclick="setAllChecks('catChecks', true)">All</button>
+              <button onclick="setAllChecks('catChecks', false)">None</button>
+            </div>
+          </div>
+          <div class="filter-dd-items" id="catChecks">
+            ${sortedCats.map(([cat,cnt])=>{
+              const cfg=CATS[cat]||CATS.Other;
+              const isChecked = cat === 'Unknown' ? '' : 'checked';
+              return `<label class="filter-check-item">
+                <input type="checkbox" value="${escHtml(cat)}" ${isChecked} onchange="applyFilters()">
+                ${cfg.icon} ${cat} <span style="font-family:'JetBrains Mono',monospace;font-size:.65rem;opacity:.5;margin-left:auto">${cnt}</span>
+              </label>`;
+            }).join('')}
+          </div>
+        </div>
+      </div>
+      
+      <div style="position:relative" id="durFilterWrapper">
+        <div class="filter-btn" id="durFilterBtn" onclick="toggleDropdown('durDropdown')">
+          Duration <span class="filter-active-count" id="durActiveCount">All</span> ▾
+        </div>
+        <div class="filter-dropdown" id="durDropdown">
+          <div class="filter-dd-header"><span>Filter by Duration</span></div>
+          <div class="filter-dd-items" id="durChecks">
+            <label class="filter-check-item">
+              <input type="radio" name="durFilter" value="all" checked onchange="applyFilters()"> All Durations
+            </label>
+            <label class="filter-check-item">
+              <input type="radio" name="durFilter" value="short" onchange="applyFilters()"> Short (&lt; 5m)
+            </label>
+            <label class="filter-check-item">
+              <input type="radio" name="durFilter" value="medium" onchange="applyFilters()"> Medium (5m - 20m)
+            </label>
+            <label class="filter-check-item">
+              <input type="radio" name="durFilter" value="long" onchange="applyFilters()"> Long (&gt; 20m)
+            </label>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  
+  document.getElementById('filtersCard').style.display='block';
+  const showInv = document.getElementById('showInvalid');
+  if(showInv) showInv.checked=false;
+  applyFilters();
+}
+
+// ===== FILTER LOGIC =====
+function toggleDropdown(id){
+  const dd = document.getElementById(id);
+  const wasOpen = dd.classList.contains('open');
+  document.querySelectorAll('.filter-dropdown').forEach(el=>el.classList.remove('open'));
+  if(!wasOpen) dd.classList.add('open');
+}
+
+// Close dropdowns when clicking outside
+document.addEventListener('click', e => {
+  if(!e.target.closest('#catFilterWrapper')) {
+    const cd = document.getElementById('catDropdown');
+    if(cd) cd.classList.remove('open');
+  }
+  if(!e.target.closest('#durFilterWrapper')) {
+    const dd = document.getElementById('durDropdown');
+    if(dd) dd.classList.remove('open');
+  }
+});
+
+function setAllChecks(containerId, state) {
+  const container = document.getElementById(containerId);
+  if(!container) return;
+  container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.checked = state;
+  });
+  applyFilters();
+}
+
+function applyFilters(){
+  // Category Filters
+  const catChecks = document.querySelectorAll('#catChecks input[type="checkbox"]');
+  const activeCats = new Set();
+  let totalCats = 0;
+  catChecks.forEach(cb => {
+    totalCats++;
+    if(cb.checked) activeCats.add(cb.value);
+  });
+  
+  // Duration Filter
+  const durCheck = document.querySelector('input[name="durFilter"]:checked');
+  const activeDur = durCheck ? durCheck.value : 'all';
+  
+  // Update badges
+  const catBtn = document.getElementById('catFilterBtn');
+  const catCount = document.getElementById('catActiveCount');
+  if(catBtn && catCount) {
+    catCount.textContent = activeCats.size;
+    if(activeCats.size < totalCats) catBtn.classList.add('active-filter');
+    else catBtn.classList.remove('active-filter');
+  }
+  
+  const durBtn = document.getElementById('durFilterBtn');
+  const durCount = document.getElementById('durActiveCount');
+  if(durBtn && durCount) {
+    durCount.textContent = activeDur === 'all' ? 'All' : '1';
+    if(activeDur !== 'all') durBtn.classList.add('active-filter');
+    else durBtn.classList.remove('active-filter');
+  }
+
+  const showInvEl = document.getElementById('showInvalid');
+  const showInvalid = showInvEl ? showInvEl.checked : false;
+
+  let shown=0,hidden=0;
+  document.querySelectorAll('.result-card').forEach(card=>{
+    const cat=card.dataset.category;
+    const isInvalid=cat==='Invalid';
+    
+    let visible = true;
+    if(isInvalid) {
+      visible = showInvalid;
+    } else {
+      visible = activeCats.has(cat);
+      if(visible && activeDur !== 'all') {
+        const secs = parseInt(card.dataset.duration||"0", 10);
+        if(secs === 0) {
+          // If no duration known, we probably shouldn't filter it out, or maybe we do? Let's hide it if duration filter active.
+          visible = false;
+        } else {
+          if(activeDur === 'short' && secs >= 300) visible = false;
+          else if(activeDur === 'medium' && (secs < 300 || secs > 1200)) visible = false;
+          else if(activeDur === 'long' && secs <= 1200) visible = false;
+        }
+      }
+    }
+    
+    card.classList.toggle('filtered-out',!visible);
+    if(visible)shown++;else hidden++;
+  });
+}
+
+function confColor(c){return c>=0.7?'var(--success)':c>=0.4?'var(--warn)':'var(--err)'}
+
+function renderTrace(r){
+  let html='';
+  // 1. Extraction
+  html+=traceDetail('🔗 Link Extraction',`<div class="step-label">Regex Pattern</div><pre>/${escHtml(r.trace.extraction.regex)}/g</pre><div class="step-label">Matched</div><pre>${escHtml(r.trace.extraction.matched)}</pre><div class="step-label">Video ID</div><pre>${r.trace.extraction.videoId}</pre>`);
+  // 2. Title fetch
+  const tf=r.trace.titleFetch;
+  html+=traceDetail('📡 Title Fetch',`<div class="step-label">Endpoint</div><pre>${escHtml(tf.endpoint)}</pre>${tf.error?`<div class="step-label">Error</div><pre style="color:var(--err)">${escHtml(tf.error)}</pre>`:`<div class="step-label">Result</div><pre>Title: ${escHtml(tf.title||'')}\nAuthor: ${escHtml(tf.author||'')}</pre>`}`);
+  // 3. ML
+  const ml=r.trace.ml;
+  if(ml.skipped){
+    html+=traceDetail('🤖 ML Classification (Tier 1)',`<pre style="color:var(--warn)">${escHtml(ml.reason)}</pre>`);
+  }else{
+    const kwList=ml.matchedKeywords.length?ml.matchedKeywords.map(k=>`  "${k.keyword}" → weight ${k.weight}`).join('\n'):'  (no keywords matched)';
+    const topList=ml.topScores.map(s=>`  ${s.category}: ${(s.confidence*100).toFixed(1)}%${s.keywords.length?' ['+s.keywords.map(k=>k.keyword).join(', ')+']':''}`).join('\n');
+    html+=traceDetail('🤖 ML Classification (Tier 1)',`<div class="step-label">Matched Keywords for "${ml.category}"</div><pre>${kwList}</pre><div class="step-label">Confidence</div><pre>${(ml.confidence*100).toFixed(1)}%\nFormula: tanh(Σweights / (3 + wordCount×0.3)) × 0.95 × shortTitlePenalty</pre><div class="step-label">Top 5 Scores</div><pre>${topList}</pre>`);
+  }
+  // 4. LLM
+  if(r.trace.llm){
+    const ll=r.trace.llm;
+    if(ll.error){
+      html+=traceDetail('🧠 LLM Classification (Tier 2)',`<pre style="color:var(--err)">Error: ${escHtml(ll.error)}</pre>`);
+    }else{
+      html+=traceDetail('🧠 LLM Classification (Tier 2)',`<div class="step-label">API Key Used</div><pre>${escHtml(ll.maskedKey||'(empty!)')}</pre><div class="step-label">Endpoint</div><pre>${escHtml(ll.requestUrl)}</pre><div class="step-label">System Prompt</div><pre>${escHtml(ll.prompt.system)}</pre><div class="step-label">User Prompt</div><pre>${escHtml(ll.prompt.user)}</pre><div class="step-label">API Request Body</div><pre>${escHtml(JSON.stringify(ll.requestBody,null,2))}</pre><div class="step-label">Raw Response</div><pre>${escHtml(ll.rawResponse)}</pre><div class="step-label">Parsed Category</div><pre>${escHtml(ll.category)}</pre>`);
+    }
+  }
+  return html;
+}
+
+function traceDetail(title,content){return `<details><summary>${title}</summary><div class="trace-content">${content}</div></details>`}
+function escHtml(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+
+// ===== EXPORT =====
+function exportCSV(){
+  const rows=[['URL','Video ID','Title','Author','Category','Confidence','Tier'].join(',')];
+  allResults.forEach(r=>rows.push([r.url,r.videoId,`"${(r.title||'').replace(/"/g,'""')}"`,`"${(r.author||'').replace(/"/g,'""')}"`,r.category,r.confidence.toFixed(3),r.tier].join(',')));
+  download('yt-categorized.csv',rows.join('\n'),'text/csv');
+}
+function exportJSON(){download('yt-categorized.json',JSON.stringify(allResults,null,2),'application/json')}
+function copyResults(){
+  const lines=allResults.map(r=>`${r.title||r.url} → ${r.category} (${(r.confidence*100).toFixed(0)}%, ${r.tier})`);
+  navigator.clipboard.writeText(lines.join('\n')).then(()=>showToast('Copied to clipboard'));
+}
+function download(name,content,type){
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));
+  a.download=name;a.click();URL.revokeObjectURL(a.href);
+}
+</script>
+</body>
+</html>

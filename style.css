@@ -29,7 +29,7 @@ body::before{content:'';position:fixed;inset:0;background:
 /* Form Controls */
 .form-group{margin-bottom:16px}
 .form-group label{display:block;font-size:.8rem;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
-input[type="text"],input[type="password"],select,textarea{
+input[type="text"],input[type="password"],input[type="search"],select,textarea{
   width:100%;padding:10px 14px;background:rgba(255,255,255,.04);border:1px solid var(--border);
   border-radius:var(--radius-sm);color:var(--text);font-family:'Inter',sans-serif;font-size:.9rem;
   transition:border-color .3s,box-shadow .3s;outline:none}

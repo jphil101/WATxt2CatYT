@@ -80,6 +80,9 @@
       <label class="check-wrap">
         <input type="checkbox" id="useLLM"> Enable LLM Tier (Tier 2) when ML confidence &lt; τ
       </label>
+      <label class="check-wrap">
+        <input type="checkbox" id="rememberKeys"> Remember API keys in this browser <span style="font-size:.75rem;color:var(--text3)">(other settings are always saved; leave off on shared computers)</span>
+      </label>
     </div>
   </section>
 
@@ -122,6 +125,9 @@
     <div class="card" id="filtersCard" style="display:none; position:relative; z-index:50;">
       <div class="card-title"><span class="icon">🔍</span> Filters</div>
       <div class="filter-group">
+        <input type="search" id="searchInput" placeholder="Search titles or channels..." oninput="applyFilters()" style="width:100%;margin-bottom:12px">
+      </div>
+      <div class="filter-group">
         <div class="filter-label">Categories</div>
         <div class="filter-checks" id="categoryFilters"></div>
       </div>
@@ -130,6 +136,7 @@
           <input type="checkbox" id="showInvalid" onchange="applyFilters()"> Show invalid / removed links <span id="invalidCount" style="font-size:.75rem;color:var(--text3);font-family:'JetBrains Mono',monospace"></span>
         </label>
       </div>
+      <div id="filterSummary" style="margin-top:8px;font-size:.78rem;color:var(--text3)"></div>
     </div>
     <div id="resultsList"></div>
   </section>
@@ -199,6 +206,7 @@ function addDynCategory() {
   if(!CAT_NAMES.find(c => c.toLowerCase() === cleanVal.toLowerCase())) {
     CAT_NAMES.push(cleanVal);
     renderDynCategories();
+    saveSettings();
   }
   input.value = '';
 }
@@ -206,10 +214,53 @@ function addDynCategory() {
 function removeDynCategory(cat) {
   CAT_NAMES = CAT_NAMES.filter(c => c !== cat);
   renderDynCategories();
+  saveSettings();
+}
+
+// ===== SETTINGS PERSISTENCE =====
+// Non-secret settings are always remembered; API keys only if the user opts in.
+const SETTINGS_KEY='ytcc_settings';
+function saveSettings(){
+  try{
+    const remember=document.getElementById('rememberKeys').checked;
+    const data={
+      provider:document.getElementById('provider').value,
+      model:document.getElementById('model').value,
+      baseUrl:document.getElementById('baseUrl').value,
+      threshold:document.getElementById('threshold').value,
+      useLLM:document.getElementById('useLLM').checked,
+      categories:CAT_NAMES,
+      rememberKeys:remember
+    };
+    if(remember){
+      data.apiKey=document.getElementById('apiKey').value;
+      data.ytApiKey=document.getElementById('ytApiKey').value;
+    }
+    localStorage.setItem(SETTINGS_KEY,JSON.stringify(data));
+  }catch(e){/* storage unavailable */}
+}
+function loadSettings(){
+  let data;
+  try{data=JSON.parse(localStorage.getItem(SETTINGS_KEY));}catch(e){return}
+  if(!data)return;
+  const set=(id,v)=>{const el=document.getElementById(id);if(el&&v!==undefined&&v!==null)el.value=v};
+  if(data.provider&&PROVIDERS[data.provider])set('provider',data.provider);
+  set('model',data.model);set('baseUrl',data.baseUrl);set('threshold',data.threshold);
+  document.getElementById('thresholdVal').textContent=document.getElementById('threshold').value;
+  document.getElementById('useLLM').checked=!!data.useLLM;
+  document.getElementById('rememberKeys').checked=!!data.rememberKeys;
+  if(data.rememberKeys){set('apiKey',data.apiKey);set('ytApiKey',data.ytApiKey);}
+  if(Array.isArray(data.categories)&&data.categories.length)CAT_NAMES=data.categories;
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+  loadSettings();
+  updateProviderUI();
   renderDynCategories();
+  ['provider','model','baseUrl','threshold','useLLM','rememberKeys','apiKey','ytApiKey'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el){el.addEventListener('change',saveSettings);el.addEventListener('input',saveSettings);}
+  });
 });
 
 // ===== UI BINDINGS =====
@@ -243,7 +294,7 @@ function toggleConfig(){
 }
 
 // Upload handlers — input overlays the zone directly, no programmatic .click() needed
-fileInput.addEventListener('change',e=>{if(e.target.files[0])handleFile(e.target.files[0])});
+fileInput.addEventListener('change',e=>{const f=e.target.files[0];e.target.value='';if(f)handleFile(f)});
 uploadZone.addEventListener('dragover',e=>{e.preventDefault();e.stopPropagation();uploadZone.classList.add('drag')});
 uploadZone.addEventListener('dragleave',e=>{if(!uploadZone.contains(e.relatedTarget))uploadZone.classList.remove('drag')});
 uploadZone.addEventListener('drop',e=>{e.preventDefault();e.stopPropagation();uploadZone.classList.remove('drag');if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0])});
@@ -927,11 +978,18 @@ function applyFilters(){
 
   const showInvEl = document.getElementById('showInvalid');
   const showInvalid = showInvEl ? showInvEl.checked : false;
+  const searchEl = document.getElementById('searchInput');
+  const terms = (searchEl ? searchEl.value : '').toLowerCase().split(/\s+/).filter(Boolean);
 
   let shown=0,hidden=0;
-  document.querySelectorAll('.result-card').forEach(card=>{
+  document.querySelectorAll('.result-card').forEach((card,i)=>{
     const cat=card.dataset.category;
     const isInvalid=cat==='Invalid';
+    const r=allResults[i]||{};
+    const haystack=`${r.title||''} ${r.author||''} ${r.url||''} ${r.category||''}`.toLowerCase();
+    if(terms.length && !terms.every(t=>haystack.includes(t))){
+      card.classList.add('filtered-out');hidden++;return;
+    }
     
     let visible = true;
     if(isInvalid) {
@@ -954,6 +1012,8 @@ function applyFilters(){
     card.classList.toggle('filtered-out',!visible);
     if(visible)shown++;else hidden++;
   });
+  const summaryEl=document.getElementById('filterSummary');
+  if(summaryEl)summaryEl.textContent=`Showing ${shown} of ${shown+hidden} videos`;
 }
 
 function confColor(c){return c>=0.7?'var(--success)':c>=0.4?'var(--warn)':'var(--err)'}
